@@ -1,0 +1,6 @@
+{
+  "name": "OmniDev",
+  "description": "Native Android developer studio repository (com.omniai.dev) with Atomic GitHub REST push, ### FILE: splitter, hybrid shell, LAN studio, Secret Guardian, and AI Build-Doctor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
