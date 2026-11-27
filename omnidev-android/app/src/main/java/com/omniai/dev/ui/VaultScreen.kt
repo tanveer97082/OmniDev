@@ -428,7 +428,7 @@ fun VaultScreen(viewModel: OmniDevViewModel) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("Omni Suite AES-256-GCM Backup (.omniai.enc)", color = OmniColors.TextPrimary, fontWeight = FontWeight.SemiBold)
                             Text(
-                                text = "Exports encrypted Vault keys and project metadata using PBKDF2-SHA256 + AES-256-GCM. Compatible across OmniDev, OmniChat, and OmniCreator.",
+                                text = "Exports encrypted Vault keys, project metadata, workspace files, Git sync state, tasks, and terminal snippets using PBKDF2-SHA256 + AES-256-GCM.",
                                 color = OmniColors.TextSecondary,
                                 fontSize = 12.sp
                             )

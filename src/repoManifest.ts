@@ -17,12 +17,15 @@ import gitHubGitEngineKt from '../omnidev-android/app/src/main/java/com/omniai/d
 import aiMultiFileSplitterKt from '../omnidev-android/app/src/main/java/com/omniai/dev/engine/AiMultiFileSplitter.kt?raw';
 import secretLeakScannerKt from '../omnidev-android/app/src/main/java/com/omniai/dev/engine/SecretLeakScanner.kt?raw';
 import aiBuildDoctorKt from '../omnidev-android/app/src/main/java/com/omniai/dev/engine/AiBuildDoctor.kt?raw';
+import crashLogAnalyzerKt from '../omnidev-android/app/src/main/java/com/omniai/dev/engine/CrashLogAnalyzer.kt?raw';
+import projectPreflightKt from '../omnidev-android/app/src/main/java/com/omniai/dev/engine/ProjectPreflight.kt?raw';
 import localLanWebServerKt from '../omnidev-android/app/src/main/java/com/omniai/dev/service/LocalLanWebServer.kt?raw';
 import projectsScreenKt from '../omnidev-android/app/src/main/java/com/omniai/dev/ui/ProjectsScreen.kt?raw';
 import editorScreenKt from '../omnidev-android/app/src/main/java/com/omniai/dev/ui/EditorScreen.kt?raw';
 import terminalScreenKt from '../omnidev-android/app/src/main/java/com/omniai/dev/ui/TerminalScreen.kt?raw';
 import vaultScreenKt from '../omnidev-android/app/src/main/java/com/omniai/dev/ui/VaultScreen.kt?raw';
 import diffReviewDialogKt from '../omnidev-android/app/src/main/java/com/omniai/dev/ui/DiffReviewDialog.kt?raw';
+import workbenchScreenKt from '../omnidev-android/app/src/main/java/com/omniai/dev/ui/WorkbenchScreen.kt?raw';
 
 export interface RepoFile {
   path: string;
@@ -121,14 +124,14 @@ export const OMNIDEV_REPO_FILES: RepoFile[] = [
     path: 'app/src/main/java/com/omniai/dev/MainActivity.kt',
     category: 'Compose UI',
     language: 'kotlin',
-    summary: 'Entry activity, AMOLED theme, OmniDevViewModel, OmniCLI, Termux bridge, and 4-tab scaffold.',
+    summary: 'Entry activity, AMOLED theme, OmniDevViewModel, OmniCLI, Termux bridge, and 5-tab scaffold.',
     content: mainActivityKt,
   },
   {
     path: 'app/src/main/java/com/omniai/dev/data/OmniDevDatabase.kt',
     category: 'Data & Security',
     language: 'kotlin',
-    summary: 'Room 2.6.1 DB (5 entities + DAO), SHA-256 WorkspaceManager, lazy EncryptedSharedPreferences, and AES-256-GCM .omniai.enc crypto.',
+    summary: 'Room 2.6.1 DB, SHA-256 WorkspaceManager, encrypted Vault, and AES-256-GCM backups for project files, tasks, sync state, and snippets.',
     content: omniDevDatabaseKt,
   },
   {
@@ -142,7 +145,7 @@ export const OMNIDEV_REPO_FILES: RepoFile[] = [
     path: 'app/src/main/java/com/omniai/dev/engine/GitHubGitEngine.kt',
     category: 'Core Engines',
     language: 'kotlin',
-    summary: 'Pure OkHttp3 6-step Atomic Git Data API push, empty-repo bootstrap, pull, Actions watcher, OTA installer, and GitAutoPushWorker.',
+    summary: 'Atomic Git Data API push/pull, remote line-diff review, manual Actions build dispatch, workflow watcher, OTA installer, and GitAutoPushWorker.',
     content: gitHubGitEngineKt,
   },
   {
@@ -167,6 +170,20 @@ export const OMNIDEV_REPO_FILES: RepoFile[] = [
     content: aiBuildDoctorKt,
   },
   {
+    path: 'app/src/main/java/com/omniai/dev/engine/CrashLogAnalyzer.kt',
+    category: 'Core Engines',
+    language: 'kotlin',
+    summary: 'Offline Logcat analyzer that extracts app exceptions, root causes, source frames, and next-step guidance.',
+    content: crashLogAnalyzerKt,
+  },
+  {
+    path: 'app/src/main/java/com/omniai/dev/engine/ProjectPreflight.kt',
+    category: 'Core Engines',
+    language: 'kotlin',
+    summary: 'Static Android workspace checks for manifest, launcher, Gradle config, icon, network permission, wrapper, and CI.',
+    content: projectPreflightKt,
+  },
+  {
     path: 'app/src/main/java/com/omniai/dev/service/LocalLanWebServer.kt',
     category: 'Core Engines',
     language: 'kotlin',
@@ -184,7 +201,7 @@ export const OMNIDEV_REPO_FILES: RepoFile[] = [
     path: 'app/src/main/java/com/omniai/dev/ui/EditorScreen.kt',
     category: 'Compose UI',
     language: 'kotlin',
-    summary: 'Tab 2: File explorer with [NEW]/[MOD]/[SYNCED] badges, monospace editor with Undo/Save, and ### FILE: splitter.',
+    summary: 'Tab 2: Searchable file explorer, pending Git change filter, monospace editor with Undo/Save, and ### FILE: splitter.',
     content: editorScreenKt,
   },
   {
@@ -198,8 +215,15 @@ export const OMNIDEV_REPO_FILES: RepoFile[] = [
     path: 'app/src/main/java/com/omniai/dev/ui/VaultScreen.kt',
     category: 'Compose UI',
     language: 'kotlin',
-    summary: 'Tab 4: Encrypted Vault, Secret Guardian scan, AI Build-Doctor, OTA updater, .omniai.enc backup, and ? Setup Guide.',
+    summary: 'Tab 5: Encrypted Vault, Secret Guardian, AI Build-Doctor, OTA updater, full-workspace .omniai.enc backup/restore, and Setup Guide.',
     content: vaultScreenKt,
+  },
+  {
+    path: 'app/src/main/java/com/omniai/dev/ui/WorkbenchScreen.kt',
+    category: 'Compose UI',
+    language: 'kotlin',
+    summary: 'Tab 4: Crash Log Analyzer, Android project preflight, GitHub Actions build dispatch/status, APK installer, and Git diff review.',
+    content: workbenchScreenKt,
   },
   {
     path: 'app/src/main/java/com/omniai/dev/ui/DiffReviewDialog.kt',

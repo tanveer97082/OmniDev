@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import androidx.activity.compose.setContent
 import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.BorderStroke
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build as BuildIcon
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Security
@@ -65,6 +67,7 @@ import com.omniai.dev.data.TerminalSnippetEntity
 import com.omniai.dev.data.VaultConfig
 import com.omniai.dev.data.VaultManager
 import com.omniai.dev.data.WorkspaceFileItem
+import com.omniai.dev.data.WorkspaceBackupFile
 import com.omniai.dev.data.WorkspaceManager
 import com.omniai.dev.engine.AiBuildDoctor
 import com.omniai.dev.engine.AiMultiFileSplitter
@@ -72,10 +75,13 @@ import com.omniai.dev.engine.BuildDoctorDiagnosis
 import com.omniai.dev.engine.GitAutoPushWorker
 import com.omniai.dev.engine.GitHubGitEngine
 import com.omniai.dev.engine.PushProgress
+import com.omniai.dev.engine.ProjectPreflight
+import com.omniai.dev.engine.ProjectPreflightReport
 import com.omniai.dev.engine.ReleaseApkAsset
 import com.omniai.dev.engine.SecretLeakFinding
 import com.omniai.dev.engine.SecretLeakScanner
 import com.omniai.dev.engine.WorkflowRunSummary
+import com.omniai.dev.engine.WorkspaceDiffFile
 import com.omniai.dev.service.LocalLanWebServer
 import com.omniai.dev.ui.DiffReviewDialog
 import com.omniai.dev.ui.EditorScreen
@@ -83,6 +89,7 @@ import com.omniai.dev.ui.ProjectsScreen
 import com.omniai.dev.ui.SecretLeakAlertDialog
 import com.omniai.dev.ui.TerminalScreen
 import com.omniai.dev.ui.VaultScreen
+import com.omniai.dev.ui.WorkbenchScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -137,6 +144,7 @@ enum class OmniTab(val label: String) {
     PROJECTS("Projects"),
     EDITOR("Editor"),
     TERMINAL("Terminal"),
+    WORKBENCH("Tools"),
     VAULT("Vault")
 }
 
@@ -180,8 +188,17 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
     private val _workspaceFiles = MutableStateFlow<List<WorkspaceFileItem>>(emptyList())
     val workspaceFiles: StateFlow<List<WorkspaceFileItem>> = _workspaceFiles.asStateFlow()
 
+    private val _deletedWorkspacePaths = MutableStateFlow<List<String>>(emptyList())
+    val deletedWorkspacePaths: StateFlow<List<String>> = _deletedWorkspacePaths.asStateFlow()
+
     private val _workflowRuns = MutableStateFlow<List<WorkflowRunSummary>>(emptyList())
     val workflowRuns: StateFlow<List<WorkflowRunSummary>> = _workflowRuns.asStateFlow()
+
+    private val _preflightReport = MutableStateFlow<ProjectPreflightReport?>(null)
+    val preflightReport: StateFlow<ProjectPreflightReport?> = _preflightReport.asStateFlow()
+
+    private val _workspaceDiffs = MutableStateFlow<List<WorkspaceDiffFile>>(emptyList())
+    val workspaceDiffs: StateFlow<List<WorkspaceDiffFile>> = _workspaceDiffs.asStateFlow()
 
     private val _commitLogs = MutableStateFlow<List<GitCommitLogEntity>>(emptyList())
     val commitLogs: StateFlow<List<GitCommitLogEntity>> = _commitLogs.asStateFlow()
@@ -226,6 +243,9 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
 
     private val _incomingSharedCode = MutableStateFlow<String?>(null)
     val incomingSharedCode: StateFlow<String?> = _incomingSharedCode.asStateFlow()
+
+    private val _incomingCrashLog = MutableStateFlow<String?>(null)
+    val incomingCrashLog: StateFlow<String?> = _incomingCrashLog.asStateFlow()
 
     private val _terminalLogs = MutableStateFlow(
         listOf(
@@ -278,6 +298,14 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun receiveSharedText(text: String) {
+        if (text.contains("FATAL EXCEPTION", ignoreCase = true) ||
+            text.contains("AndroidRuntime", ignoreCase = true)
+        ) {
+            _incomingCrashLog.value = text
+            _selectedTab.value = OmniTab.WORKBENCH
+            emitMessage("Shared crash log opened in Build & Diagnostics.")
+            return
+        }
         _incomingSharedCode.value = text
         _selectedTab.value = OmniTab.EDITOR
         emitMessage("Received shared text in File Splitter.")
@@ -287,8 +315,13 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
         _incomingSharedCode.value = null
     }
 
+    fun consumeIncomingCrashLog() {
+        _incomingCrashLog.value = null
+    }
+
     fun selectActiveProject(projectId: Long) {
         _activeProjectId.value = projectId
+        _workspaceDiffs.value = emptyList()
         refreshActiveWorkspace()
         commitObserverJob?.cancel()
         commitObserverJob = viewModelScope.launch {
@@ -318,10 +351,12 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             val proj = activeProject() ?: run {
                 _workspaceFiles.value = emptyList()
+                _deletedWorkspacePaths.value = emptyList()
                 return@launch
             }
             val indexed = dao.getFileIndexForProject(proj.id)
             _workspaceFiles.value = WorkspaceManager.scanProjectFiles(appContext, proj, indexed)
+            _deletedWorkspacePaths.value = WorkspaceManager.computeDeletedPaths(appContext, proj, indexed)
         }
     }
 
@@ -605,6 +640,82 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun dispatchBuildWorkflow(project: ProjectEntity) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            _pushProgress.value = PushProgress("Starting GitHub APK build...")
+            try {
+                val vault = readVaultConfig()
+                gitEngine.dispatchBuildWorkflow(
+                    token = vault.githubToken,
+                    owner = project.githubOwner,
+                    repo = project.githubRepo,
+                    branch = project.githubBranch
+                )
+                emitMessage("GitHub APK build started for ${project.githubBranch}. Refresh Actions to follow progress.")
+            } catch (e: Exception) {
+                emitMessage(e.message ?: "Could not start GitHub APK build")
+            } finally {
+                _pushProgress.value = null
+                _isBusy.value = false
+            }
+        }
+    }
+
+    fun runProjectPreflight(project: ProjectEntity) {
+        _preflightReport.value = null
+        _isBusy.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val root = WorkspaceManager.projectRoot(appContext, project.slug)
+                val files = root.walkTopDown()
+                    .filter { it.isFile && !it.relativeTo(root).path.replace('\\', '/').startsWith(".git/") }
+                    .associate { file ->
+                        val relativePath = file.relativeTo(root).path.replace('\\', '/')
+                        val shouldRead = relativePath.endsWith("AndroidManifest.xml") ||
+                            relativePath.endsWith("build.gradle") ||
+                            relativePath.endsWith("build.gradle.kts")
+                        relativePath to if (shouldRead && file.length() <= 512_000) {
+                            file.readText(Charsets.UTF_8)
+                        } else {
+                            ""
+                        }
+                    }
+                _preflightReport.value = ProjectPreflightReport(
+                    projectId = project.id,
+                    checks = ProjectPreflight.evaluate(files)
+                )
+            } catch (e: Exception) {
+                emitMessage(e.message ?: "Project preflight failed")
+            } finally {
+                _isBusy.value = false
+            }
+        }
+    }
+
+    fun reviewWorkspaceDiff(project: ProjectEntity) {
+        _workspaceDiffs.value = emptyList()
+        viewModelScope.launch {
+            _isBusy.value = true
+            _pushProgress.value = PushProgress("Comparing workspace with GitHub...")
+            try {
+                val diffs = gitEngine.fetchWorkspaceDiff(
+                    context = appContext,
+                    db = db,
+                    token = readVaultConfig().githubToken,
+                    project = project
+                )
+                _workspaceDiffs.value = diffs
+                emitMessage(if (diffs.isEmpty()) "Workspace matches the remote branch." else "Found ${diffs.size} file difference(s).")
+            } catch (e: Exception) {
+                emitMessage(e.message ?: "Git diff review failed")
+            } finally {
+                _pushProgress.value = null
+                _isBusy.value = false
+            }
+        }
+    }
+
     fun runBuildDoctor(project: ProjectEntity, runId: Long) {
         viewModelScope.launch {
             _isBusy.value = true
@@ -686,10 +797,35 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                val projects = dao.getAllProjects()
+                val workspaceFiles = projects.flatMap { project ->
+                    val root = WorkspaceManager.projectRoot(appContext, project.slug)
+                    root.walkTopDown()
+                        .filter { it.isFile }
+                        .mapNotNull { file ->
+                            val relativePath = file.relativeTo(root).path.replace('\\', '/')
+                            if (relativePath == ".git" || relativePath.startsWith(".git/")) {
+                                null
+                            } else {
+                                require(file.canonicalPath.startsWith(root.canonicalPath + File.separator)) {
+                                    "Cannot include a file outside the project workspace in the backup."
+                                }
+                                WorkspaceBackupFile(
+                                    projectSlug = project.slug,
+                                    relativePath = relativePath,
+                                    base64Content = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+                                )
+                            }
+                        }
+                        .toList()
+                }
                 val payload = OmniSuiteBackupPayload(
                     vault = _vaultConfig.value,
-                    projects = dao.getAllProjects(),
-                    tasks = dao.getAllTasks()
+                    projects = projects,
+                    tasks = dao.getAllTasks(),
+                    workspaceFiles = workspaceFiles,
+                    fileIndices = projects.flatMap { dao.getFileIndexForProject(it.id) },
+                    terminalSnippets = dao.getAllSnippets()
                 )
                 val encrypted = OmniBackupCrypto.encryptPayload(payload, password)
                 appContext.contentResolver.openOutputStream(uri)?.use { it.write(encrypted) }
@@ -707,21 +843,67 @@ class OmniDevViewModel(application: Application) : AndroidViewModel(application)
                 val raw = appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: throw IllegalStateException("Could not read backup file.")
                 val payload = OmniBackupCrypto.decryptPayload(raw, password)
+                val payloadSlugs = payload.projects.map { it.slug }
+                val payloadProjectIds = payload.projects.map { it.id }.toSet()
+                require(payloadSlugs.all { it.matches(Regex("[a-z0-9][a-z0-9-]*")) }) {
+                    "Backup contains an invalid project slug."
+                }
+                require(payloadSlugs.size == payloadSlugs.toSet().size) {
+                    "Backup contains duplicate project slugs."
+                }
+                payload.workspaceFiles.forEach { backupFile ->
+                    require(backupFile.projectSlug in payloadSlugs) {
+                        "Backup file references a project that is not included."
+                    }
+                    val relativePath = backupFile.relativePath.replace('\\', '/')
+                    val pathSegments = relativePath.split('/')
+                    require(
+                        relativePath.isNotBlank() &&
+                            !relativePath.startsWith('/') &&
+                            pathSegments.none { it.isBlank() || it == "." || it == ".." }
+                    ) { "Backup contains an unsafe workspace file path." }
+                }
+                require(payload.fileIndices.all { index ->
+                    val relativePath = index.relativePath.replace('\\', '/')
+                    val segments = relativePath.split('/')
+                    index.projectId in payloadProjectIds &&
+                        relativePath.isNotBlank() &&
+                        !relativePath.startsWith('/') &&
+                        segments.none { it.isBlank() || it == "." || it == ".." }
+                }) {
+                    "Backup contains an invalid project file index."
+                }
                 vaultManager.save(payload.vault)
                 if (_isVaultUnlocked.value) {
                     _vaultConfig.value = vaultManager.load()
                 }
                 val idMap = mutableMapOf<Long, Long>()
                 payload.projects.forEach { proj ->
-                    val newId = dao.insertProject(proj.copy(id = 0))
-                    idMap[proj.id] = newId
+                    idMap[proj.id] = dao.insertProject(proj.copy(id = 0))
                     WorkspaceManager.projectRoot(appContext, proj.slug)
                 }
                 payload.tasks.forEach { task ->
                     val mappedId = idMap[task.projectId] ?: return@forEach
                     dao.insertTask(task.copy(id = 0, projectId = mappedId))
                 }
-                emitMessage("Restored Vault + ${payload.projects.size} project(s).")
+                payload.fileIndices.forEach { index ->
+                    val mappedId = idMap[index.projectId] ?: return@forEach
+                    dao.upsertFileIndices(listOf(index.copy(id = 0, projectId = mappedId)))
+                }
+                var restoredFileCount = 0
+                payload.workspaceFiles.forEach { backupFile ->
+                    val relativePath = backupFile.relativePath.replace('\\', '/')
+                    val root = WorkspaceManager.projectRoot(appContext, backupFile.projectSlug)
+                    val target = File(root, relativePath)
+                    require(target.canonicalPath.startsWith(root.canonicalPath + File.separator)) {
+                        "Backup file path escapes the project workspace."
+                    }
+                    target.parentFile?.mkdirs()
+                    target.writeBytes(Base64.decode(backupFile.base64Content, Base64.DEFAULT))
+                    restoredFileCount++
+                }
+                payload.terminalSnippets.forEach { dao.insertSnippet(it.copy(id = 0)) }
+                emitMessage("Restored ${payload.projects.size} project(s), $restoredFileCount file(s), and Vault.")
             } catch (e: Exception) {
                 emitMessage("Restore failed: ${e.message}")
             }
@@ -1068,6 +1250,7 @@ private fun OmniDevRootApp(viewModel: OmniDevViewModel) {
                             OmniTab.PROJECTS -> Icons.Default.Folder
                             OmniTab.EDITOR -> Icons.Default.Code
                             OmniTab.TERMINAL -> Icons.Default.Terminal
+                            OmniTab.WORKBENCH -> Icons.Default.BuildIcon
                             OmniTab.VAULT -> Icons.Default.Security
                         }
                         NavigationBarItem(
@@ -1153,6 +1336,7 @@ private fun OmniDevRootApp(viewModel: OmniDevViewModel) {
                     OmniTab.PROJECTS -> ProjectsScreen(viewModel)
                     OmniTab.EDITOR -> EditorScreen(viewModel)
                     OmniTab.TERMINAL -> TerminalScreen(viewModel)
+                    OmniTab.WORKBENCH -> WorkbenchScreen(viewModel)
                     OmniTab.VAULT -> VaultScreen(viewModel)
                 }
             }

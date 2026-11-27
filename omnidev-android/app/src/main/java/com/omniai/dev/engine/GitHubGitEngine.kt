@@ -41,6 +41,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 
 data class PushProgress(
@@ -78,6 +81,13 @@ data class ReleaseApkAsset(
     val assetName: String,
     val downloadUrl: String,
     val sizeBytes: Long
+)
+
+data class WorkspaceDiffFile(
+    val relativePath: String,
+    val changeType: String,
+    val isBinary: Boolean,
+    val lines: List<DiffLine>
 )
 
 class GitHubGitEngine(
@@ -444,6 +454,124 @@ class GitHubGitEngine(
         downloadedCount
     }
 
+    suspend fun fetchWorkspaceDiff(
+        context: Context,
+        db: OmniDevDatabase,
+        token: String,
+        project: ProjectEntity
+    ): List<WorkspaceDiffFile> = withContext(Dispatchers.IO) {
+        require(token.isNotBlank()) { "Unlock the Vault and configure a GitHub token to review remote diffs." }
+        require(project.githubOwner.isNotBlank() && project.githubRepo.isNotBlank()) {
+            "Configure the GitHub owner and repository before reviewing diffs."
+        }
+        val repositoryRequest = Request.Builder()
+            .url("https://api.github.com/repos/${project.githubOwner.trim()}/${project.githubRepo.trim()}")
+            .withGitHubHeaders(token)
+            .get()
+            .build()
+        val (repositoryCode, repositoryBody) = executeJson(repositoryRequest)
+        if (repositoryCode !in 200..299) {
+            throw IOException("GitHub repository is not accessible (HTTP $repositoryCode): ${extractErrorMessage(repositoryBody)}")
+        }
+        val branch = project.githubBranch.trim().ifBlank { "main" }
+        val branchRequest = Request.Builder()
+            .url("https://api.github.com/repos/${project.githubOwner.trim()}/${project.githubRepo.trim()}/branches/${Uri.encode(branch)}")
+            .withGitHubHeaders(token)
+            .get()
+            .build()
+        val (branchCode, branchBody) = executeJson(branchRequest)
+        if (branchCode !in 200..299) {
+            throw IOException("GitHub branch '$branch' is not accessible (HTTP $branchCode): ${extractErrorMessage(branchBody)}")
+        }
+
+        val indexed = db.dao().getFileIndexForProject(project.id)
+        val localFiles = WorkspaceManager.scanProjectFiles(context, project, indexed)
+        val changedFiles = localFiles.filter { it.state != FileSyncState.SYNCED }
+        val deletedPaths = WorkspaceManager.computeDeletedPaths(context, project, indexed)
+        val paths = (changedFiles.map { it.relativePath } + deletedPaths).distinct().sorted()
+        require(paths.size <= 30) {
+            "Diff review is limited to 30 changed files per request. Review or push a smaller set first."
+        }
+
+        paths.mapNotNull { relativePath ->
+            val root = WorkspaceManager.projectRoot(context, project.slug)
+            val localFile = File(root, relativePath)
+            require(localFile.canonicalPath.startsWith(root.canonicalPath + File.separator)) {
+                "Indexed path escapes the project workspace."
+            }
+            val localBytes = if (localFile.isFile) localFile.readBytes() else null
+            val remoteBytes = fetchRemoteFileBytes(
+                token = token,
+                owner = project.githubOwner.trim(),
+                repo = project.githubRepo.trim(),
+                branch = branch,
+                relativePath = relativePath
+            )
+            if (localBytes == null && remoteBytes == null) return@mapNotNull null
+            if (localBytes != null && remoteBytes != null && localBytes.contentEquals(remoteBytes)) {
+                return@mapNotNull null
+            }
+
+            val changeType = when {
+                localBytes == null -> "DELETED"
+                remoteBytes == null -> "ADDED"
+                else -> "MODIFIED"
+            }
+            val oldText = remoteBytes?.let(::decodeUtf8)
+            val newText = localBytes?.let(::decodeUtf8)
+            val isBinary = (remoteBytes != null && oldText == null) ||
+                (localBytes != null && newText == null)
+            WorkspaceDiffFile(
+                relativePath = relativePath,
+                changeType = changeType,
+                isBinary = isBinary,
+                lines = if (isBinary) {
+                    emptyList()
+                } else {
+                    AiBuildDoctor.computeLineDiff(oldText.orEmpty(), newText.orEmpty())
+                }
+            )
+        }
+    }
+
+    private fun fetchRemoteFileBytes(
+        token: String,
+        owner: String,
+        repo: String,
+        branch: String,
+        relativePath: String
+    ): ByteArray? {
+        val encodedPath = Uri.encode(relativePath, "/")
+        val request = Request.Builder()
+            .url("https://api.github.com/repos/$owner/$repo/contents/$encodedPath?ref=${Uri.encode(branch)}")
+            .withGitHubHeaders(token)
+            .get()
+            .build()
+        val (code, body) = executeJson(request)
+        if (code == 404) return null
+        if (code !in 200..299) {
+            throw IOException("Could not fetch remote file '$relativePath' (HTTP $code): ${extractErrorMessage(body)}")
+        }
+        val obj = parseObject(body)
+        val encoding = obj["encoding"]?.jsonPrimitive?.contentOrNull
+        require(encoding == "base64") {
+            "GitHub did not return file content for '$relativePath'; large files cannot be diffed."
+        }
+        val encodedContent = obj["content"]?.jsonPrimitive?.contentOrNull
+            ?: throw IOException("Remote file '$relativePath' has no content.")
+        return Base64.decode(encodedContent.filterNot { it.isWhitespace() }, Base64.DEFAULT)
+    }
+
+    private fun decodeUtf8(bytes: ByteArray): String? = try {
+        StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (_: java.nio.charset.CharacterCodingException) {
+        null
+    }
+
     suspend fun fetchRecentWorkflowRuns(
         token: String,
         owner: String,
@@ -459,6 +587,7 @@ class GitHubGitEngine(
         if (code !in 200..299) {
             throw IOException("Actions fetch failed (HTTP $code): ${extractErrorMessage(body)}")
         }
+
         val runs = parseObject(body)["workflow_runs"]?.jsonArray.orEmpty()
         runs.map { el ->
             val obj = el.jsonObject
@@ -471,6 +600,30 @@ class GitHubGitEngine(
                 htmlUrl = obj["html_url"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 createdAt = obj["created_at"]?.jsonPrimitive?.contentOrNull.orEmpty()
             )
+        }
+    }
+
+    suspend fun dispatchBuildWorkflow(
+        token: String,
+        owner: String,
+        repo: String,
+        branch: String
+    ) = withContext(Dispatchers.IO) {
+        require(token.isNotBlank()) { "GitHub token is missing. Add one with Actions workflow permissions in the Vault." }
+        require(owner.isNotBlank() && repo.isNotBlank()) {
+            "Configure the GitHub owner and repository before starting a build."
+        }
+        val payload = buildJsonObject {
+            put("ref", branch.trim().ifBlank { "main" })
+        }
+        val request = Request.Builder()
+            .url("https://api.github.com/repos/${owner.trim()}/${repo.trim()}/actions/workflows/build-release-apk.yml/dispatches")
+            .withGitHubHeaders(token)
+            .post(payload.toString().toRequestBody(jsonMediaType))
+            .build()
+        val (code, body) = executeJson(request)
+        if (code != 204) {
+            throw IOException("Could not start the GitHub APK build (HTTP $code): ${extractErrorMessage(body)}")
         }
     }
 

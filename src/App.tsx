@@ -385,13 +385,14 @@ export default function App() {
             <div className="p-5 rounded-xl bg-[#13131A] border border-[#232330] space-y-2">
               <div className="flex items-center gap-2 text-sm font-semibold text-[#EDEDF5]">
                 <Layers className="w-4 h-4 text-[#00E5FF]" />
-                4-Tab AMOLED Compose Workspace
+                5-Tab AMOLED Compose Workspace
               </div>
               <ul className="text-xs text-[#9898AE] space-y-1.5 leading-relaxed">
                 <li>1. Projects &amp; Kanban: Room DB, pending diff counts, private repo creation, Actions watcher.</li>
-                <li>2. Editor &amp; Splitter: Local SHA-256 diff explorer, monospace editor, and <span className="font-mono text-[#EDEDF5]">### FILE:</span> parser + Android <span className="font-mono text-[#EDEDF5]">ACTION_SEND</span> receiver.</li>
+                <li>2. Editor &amp; Splitter: Searchable workspace, Git change filter, monospace editor, and <span className="font-mono text-[#EDEDF5]">### FILE:</span> parser + Android <span className="font-mono text-[#EDEDF5]">ACTION_SEND</span> receiver.</li>
                 <li>3. Hybrid Terminal &amp; LAN Studio: <span className="font-mono text-[#EDEDF5]">/system/bin/sh</span>, OmniCLI, Termux Bridge, and <span className="font-mono text-[#EDEDF5]">ServerSocket :8787</span> dashboard with 6-digit PIN.</li>
-                <li>4. Vault, Backup &amp; Build-Doctor: EncryptedSharedPreferences, Secret Guardian, AI Diff Fixer, OTA APK installer, and AES-256-GCM <span className="font-mono text-[#EDEDF5]">.omniai.enc</span> export.</li>
+                <li>4. Build &amp; Diagnostics: Offline Logcat analysis, Android preflight checks, GitHub Actions build dispatch/status, release APK install, and remote Git diff review.</li>
+                <li>5. Vault &amp; Backup: EncryptedSharedPreferences, Secret Guardian, AI Build-Doctor, and AES-256-GCM <span className="font-mono text-[#EDEDF5]">.omniai.enc</span> backup/restore for workspace files and sync state.</li>
               </ul>
             </div>
 

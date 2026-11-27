@@ -64,6 +64,7 @@ fun EditorScreen(viewModel: OmniDevViewModel) {
     val projects by viewModel.projects.collectAsState()
     val activeId by viewModel.activeProjectId.collectAsState()
     val files by viewModel.workspaceFiles.collectAsState()
+    val deletedPaths by viewModel.deletedWorkspacePaths.collectAsState()
     val incomingShared by viewModel.incomingSharedCode.collectAsState()
     val clipboard = LocalClipboardManager.current
 
@@ -75,6 +76,8 @@ fun EditorScreen(viewModel: OmniDevViewModel) {
     var originalText by remember { mutableStateOf("") }
     var splitterText by remember { mutableStateOf("") }
     var showNewFileDialog by remember { mutableStateOf(false) }
+    var fileSearch by remember { mutableStateOf("") }
+    var changesOnly by remember { mutableStateOf(false) }
 
     LaunchedEffect(incomingShared) {
         if (!incomingShared.isNullOrBlank()) {
@@ -157,11 +160,58 @@ fun EditorScreen(viewModel: OmniDevViewModel) {
 
         when (mode) {
             EditorMode.FILES -> {
+                OutlinedTextField(
+                    value = fileSearch,
+                    onValueChange = { fileSearch = it },
+                    label = { Text("Search workspace file paths") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                val changedCount = files.count { it.state != FileSyncState.SYNCED } + deletedPaths.size
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    FilterChip(
+                        selected = changesOnly,
+                        onClick = { changesOnly = !changesOnly },
+                        label = { Text("Git changes ($changedCount)", fontSize = 12.sp) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = OmniColors.Warning.copy(alpha = 0.2f),
+                            selectedLabelColor = OmniColors.Warning
+                        )
+                    )
+                    Text(
+                        text = "New / modified / deleted",
+                        color = OmniColors.TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+                val visibleFiles = files.filter { item ->
+                    (!changesOnly || item.state != FileSyncState.SYNCED) &&
+                        (fileSearch.isBlank() || item.relativePath.contains(fileSearch, ignoreCase = true))
+                }
+                val visibleDeletedPaths = if (changesOnly) {
+                    deletedPaths.filter { fileSearch.isBlank() || it.contains(fileSearch, ignoreCase = true) }
+                } else {
+                    emptyList()
+                }
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(files, key = { it.relativePath }) { item ->
+                    if (visibleFiles.isEmpty() && visibleDeletedPaths.isEmpty()) {
+                        item {
+                            Text(
+                                text = if (changesOnly) "No matching pending changes." else "No files match this search.",
+                                color = OmniColors.TextSecondary,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                        }
+                    }
+                    items(visibleFiles, key = { it.relativePath }) { item ->
                         val badgeColor = when (item.state) {
                             FileSyncState.NEW -> OmniColors.Cyan
                             FileSyncState.MOD -> OmniColors.Warning
@@ -214,6 +264,22 @@ fun EditorScreen(viewModel: OmniDevViewModel) {
                                     )
                                 }
                             }
+                        }
+                    }
+                    items(visibleDeletedPaths, key = { "deleted:$it" }) { path ->
+                        Surface(
+                            color = OmniColors.Card,
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(1.dp, OmniColors.Danger.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "[DELETED] $path",
+                                color = OmniColors.Danger,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                            )
                         }
                     }
                 }

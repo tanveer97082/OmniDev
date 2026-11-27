@@ -82,6 +82,7 @@ data class ProjectTaskEntity(
     ],
     indices = [Index("projectId"), Index(value = ["projectId", "relativePath"], unique = true)]
 )
+@Serializable
 data class ProjectFileIndexEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val projectId: Long,
@@ -181,6 +182,9 @@ interface OmniDevDao {
 
     @Query("SELECT COUNT(*) FROM terminal_snippets")
     suspend fun countSnippets(): Int
+
+    @Query("SELECT * FROM terminal_snippets ORDER BY id ASC")
+    suspend fun getAllSnippets(): List<TerminalSnippetEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSnippet(snippet: TerminalSnippetEntity): Long
@@ -373,13 +377,23 @@ class VaultManager(context: Context) {
 }
 
 @Serializable
+data class WorkspaceBackupFile(
+    val projectSlug: String,
+    val relativePath: String,
+    val base64Content: String
+)
+
+@Serializable
 data class OmniSuiteBackupPayload(
-    val suiteFormatVersion: Int = 1,
+    val suiteFormatVersion: Int = 2,
     val sourceApp: String = "com.omniai.dev",
     val exportedAt: Long = System.currentTimeMillis(),
     val vault: VaultConfig,
     val projects: List<ProjectEntity>,
-    val tasks: List<ProjectTaskEntity>
+    val tasks: List<ProjectTaskEntity>,
+    val workspaceFiles: List<WorkspaceBackupFile> = emptyList(),
+    val fileIndices: List<ProjectFileIndexEntity> = emptyList(),
+    val terminalSnippets: List<TerminalSnippetEntity> = emptyList()
 )
 
 object OmniBackupCrypto {
