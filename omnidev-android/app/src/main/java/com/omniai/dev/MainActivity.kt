@@ -8,7 +8,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -991,10 +990,6 @@ class MainActivity : FragmentActivity() {
 
     private lateinit var viewModel: OmniDevViewModel
 
-    private val notificationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* User responded to POST_NOTIFICATIONS */ }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewModel = ViewModelProvider(this)[OmniDevViewModel::class.java]
@@ -1005,7 +1000,10 @@ class MainActivity : FragmentActivity() {
                 Manifest.permission.POST_NOTIFICATIONS
             ) == PackageManager.PERMISSION_GRANTED
             if (!granted) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                requestPermissions(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    POST_NOTIFICATIONS_REQUEST_CODE
+                )
             }
         }
 
@@ -1030,6 +1028,10 @@ class MainActivity : FragmentActivity() {
                 viewModel.receiveSharedText(shared)
             }
         }
+    }
+
+    private companion object {
+        const val POST_NOTIFICATIONS_REQUEST_CODE = 1001
     }
 }
 
